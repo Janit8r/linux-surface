@@ -1,0 +1,72 @@
+name: Build OpenWrt Kernel with Surface Support
+
+on:
+  push:
+    branches:
+      - main  # 或您希望触发构建的其他分支
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # 检出当前仓库代码
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      # 安装构建依赖
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            libncurses5-dev \
+            zlib1g-dev \
+            gawk \
+            git \
+            ccache \
+            libssl-dev \
+            xsltproc \
+            rsync \
+            wget \
+            unzip \
+            python3-distutils \
+            libxml-parser-perl \
+            sudo
+
+      # 克隆 OpenWrt 源码
+      - name: Clone OpenWrt repository
+        run: |
+          git clone https://github.com/openwrt/openwrt.git
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      # 添加 Surface 内核源码作为子模块
+      - name: Add Surface kernel source
+        run: |
+          cd openwrt
+          git submodule add https://github.com/linux-surface/linux-surface.git target/linux/surface
+          git submodule update --init --recursive
+
+      # 应用 Surface 内核补丁
+      - name: Apply Surface kernel patches
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          ./apply_patches.sh ../patches
+
+      # 复制 surface-6.12.config 配置文件
+      - name: Copy kernel configuration
+        run: |
+          cp ../surface-6.12.config .config
+
+      # 配置内核
+      - name: Configure kernel
+        run: |
+          make menuconfig  # 在此步骤中，您可以选择需要的内核模块和配置选项
+
+      # 编译内核
+      - name: Build kernel
+        run: |
+          make -j$(nproc)  # 使用所有可用的处理器核心进行编译
