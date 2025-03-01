@@ -6,6 +6,7 @@ on:
       - main
   workflow_dispatch:
 
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -52,21 +53,25 @@ jobs:
       - name: Apply Surface kernel patches
         run: |
           cd openwrt
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
-          ./apply_patches.sh ../patches
+          PATCH_DIR=../../patches/6.12
+          for patch in $PATCH_DIR/*.patch; do
+            [ -f "$patch" ] && git apply "$patch"
+          done
 
       # 复制 surface-6.12.config 配置文件
       - name: Copy kernel configuration
         run: |
-          cp ../surface-6.12.config .config
+          cp ../surface-6.12.config openwrt/.config
 
       # 配置内核
       - name: Configure kernel
         run: |
+          cd openwrt
           make menuconfig  # 在此步骤中，您可以选择需要的内核模块和配置选项
 
       # 编译内核
       - name: Build kernel
         run: |
+          cd openwrt
           make -j$(nproc)  # 使用所有可用的处理器核心进行编译
+
