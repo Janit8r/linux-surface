@@ -49,13 +49,17 @@ jobs:
           git submodule add https://github.com/linux-surface/linux-surface.git target/linux/surface
           git submodule update --init --recursive
 
+      # 输出当前工作目录（用于调试）
+      - name: Print working directory
+        run: pwd
+
       # 应用 Surface 内核补丁
       - name: Apply Surface kernel patches
         run: |
           cd openwrt
           PATCH_DIR=../../patches/6.12
           for patch in $PATCH_DIR/*.patch; do
-            [ -f "$patch" ] && git apply "$patch"
+            [ -f "$patch" ] && patch -p1 < "$patch" || echo "Patch $patch not found"
           done
 
       # 复制 surface-6.12.config 配置文件
@@ -74,4 +78,3 @@ jobs:
         run: |
           cd openwrt
           make -j$(nproc)  # 使用所有可用的处理器核心进行编译
-
