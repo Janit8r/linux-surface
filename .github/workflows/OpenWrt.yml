@@ -30,7 +30,6 @@ jobs:
             rsync \
             wget \
             unzip \
-            python3-distutils \
             libxml-parser-perl \
             sudo
 
