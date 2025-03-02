@@ -1,5 +1,5 @@
-# OpenWrt-CI workflow (完整示例)
-# 参考 P3TERX/Actions-OpenWrt 脚本及各位大神讨论后的改进措施
+# OpenWrt-CI workflow
+# 参考 P3TERX/Actions-OpenWrt 脚本及讨论改进措施
 name: OpenWrt-CI
 
 on:
@@ -18,7 +18,7 @@ jobs:
         run: |
           echo "Cleaning /tmp directory..."
           sudo rm -rf /tmp/* || true
-          # 创建一个新的临时目录（确保空间充足）
+          # 在 $HOME 下创建一个临时目录以确保空间充足
           mkdir -p $HOME/tmp
           export TMPDIR=$HOME/tmp
           echo "TMPDIR set to: $TMPDIR"
@@ -40,11 +40,17 @@ jobs:
 
       - name: Update feeds
         run: |
-          # 如果 feeds.conf.default 不存在，则复制默认配置文件
+          # 检查 feeds.conf.default 是否存在，如果不存在则判断 feeds.conf.default.sample 是否存在
           if [ ! -f feeds.conf.default ]; then
-            echo "feeds.conf.default not found, copying from feeds.conf.default.sample"
-            cp feeds.conf.default.sample feeds.conf.default
+            if [ -f feeds.conf.default.sample ]; then
+              echo "feeds.conf.default not found, copying from feeds.conf.default.sample"
+              cp feeds.conf.default.sample feeds.conf.default
+            else
+              echo "No feeds configuration file found, creating an empty feeds.conf.default"
+              touch feeds.conf.default
+            fi
           fi
+          # 修改 feeds.conf.default 中的设置
           sed -i 's/#src-git helloworld/src-git helloworld/g' feeds.conf.default
           ./scripts/feeds update -a
           ./scripts/feeds install -a
@@ -61,7 +67,7 @@ jobs:
         run: |
           mkdir -p $TMPDIR
           echo "Using TMPDIR: $TMPDIR"
-          # 开始编译，若并行编译失败则切换到单线程详细模式
+          # 尝试并行编译，失败则切换到单线程详细模式
           make -j$(nproc) || make -j1 V=s
           echo "======================="
           echo "Disk usage after compile:"
@@ -76,7 +82,7 @@ jobs:
       - name: Prepare artifacts
         run: |
           mkdir -p ./artifact/package ./artifact/buildinfo
-          # 删除中间生成的 packages 文件夹以减小体积
+          # 删除生成过程中多余的 packages 文件夹
           rm -rf $(find ./bin/targets/ -type d -name "packages")
           cp -rf $(find ./bin/packages/ -type f -name "*.ipk") ./artifact/package/
           cp -rf $(find ./bin/targets/ -type f \( -name "*.buildinfo" -o -name "*.manifest" \)) ./artifact/buildinfo/
