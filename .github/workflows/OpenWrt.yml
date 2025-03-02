@@ -1,5 +1,3 @@
-# OpenWrt-CI workflow
-# 参考 P3TERX/Actions-OpenWrt 脚本及讨论改进措施
 name: OpenWrt-CI
 
 on:
@@ -18,7 +16,6 @@ jobs:
         run: |
           echo "Cleaning /tmp directory..."
           sudo rm -rf /tmp/* || true
-          # 在 $HOME 下创建一个临时目录以确保空间充足
           mkdir -p $HOME/tmp
           export TMPDIR=$HOME/tmp
           echo "TMPDIR set to: $TMPDIR"
@@ -35,12 +32,25 @@ jobs:
           large-packages: true
           swap-storage: true
 
-      - name: Checkout OpenWrt source
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Update feeds
+      - name: Ensure OpenWrt source
+        id: set_workdir
         run: |
-          # 检查 feeds.conf.default 是否存在，如果不存在则判断 feeds.conf.default.sample 是否存在
+          if [ -f feeds.conf.default ]; then
+            echo "Using current repository as OpenWrt source."
+            echo "WORKDIR=." >> $GITHUB_OUTPUT
+          else
+            echo "feeds.conf.default not found, cloning OpenWrt source into openwrt..."
+            git clone https://github.com/coolsnowwolf/lede.git openwrt
+            echo "WORKDIR=openwrt" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update feeds
+        working-directory: ${{ steps.set_workdir.outputs.WORKDIR }}
+        run: |
+          # 如果 feeds.conf.default 不存在，则尝试复制默认配置文件；若 sample 也不存在则创建空文件
           if [ ! -f feeds.conf.default ]; then
             if [ -f feeds.conf.default.sample ]; then
               echo "feeds.conf.default not found, copying from feeds.conf.default.sample"
@@ -50,24 +60,25 @@ jobs:
               touch feeds.conf.default
             fi
           fi
-          # 修改 feeds.conf.default 中的设置
           sed -i 's/#src-git helloworld/src-git helloworld/g' feeds.conf.default
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
       - name: Generate default config
+        working-directory: ${{ steps.set_workdir.outputs.WORKDIR }}
         run: make defconfig
 
       - name: Download packages
+        working-directory: ${{ steps.set_workdir.outputs.WORKDIR }}
         run: make download -j16
 
       - name: Compile firmware
+        working-directory: ${{ steps.set_workdir.outputs.WORKDIR }}
         env:
-          TMPDIR: ${{ runner.workspace }}/tmp  # 指定编译过程中使用的临时目录
+          TMPDIR: ${{ runner.workspace }}/tmp
         run: |
           mkdir -p $TMPDIR
           echo "Using TMPDIR: $TMPDIR"
-          # 尝试并行编译，失败则切换到单线程详细模式
           make -j$(nproc) || make -j1 V=s
           echo "======================="
           echo "Disk usage after compile:"
@@ -80,9 +91,9 @@ jobs:
           du -h --max-depth=1 ./bin
 
       - name: Prepare artifacts
+        working-directory: ${{ steps.set_workdir.outputs.WORKDIR }}
         run: |
           mkdir -p ./artifact/package ./artifact/buildinfo
-          # 删除生成过程中多余的 packages 文件夹
           rm -rf $(find ./bin/targets/ -type d -name "packages")
           cp -rf $(find ./bin/packages/ -type f -name "*.ipk") ./artifact/package/
           cp -rf $(find ./bin/targets/ -type f \( -name "*.buildinfo" -o -name "*.manifest" \)) ./artifact/buildinfo/
@@ -91,16 +102,16 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: OpenWrt_buildinfo
-          path: ./artifact/buildinfo/
+          path: ${{ steps.set_workdir.outputs.WORKDIR }}/artifact/buildinfo/
 
       - name: Upload package artifact
         uses: actions/upload-artifact@v4
         with:
           name: OpenWrt_package
-          path: ./artifact/package/
+          path: ${{ steps.set_workdir.outputs.WORKDIR }}/artifact/package/
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
           name: OpenWrt_firmware
-          path: ./bin/targets/
+          path: ${{ steps.set_workdir.outputs.WORKDIR }}/bin/targets/
