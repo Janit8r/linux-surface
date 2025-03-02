@@ -1,4 +1,6 @@
-name: Build OpenWrt Kernel with Surface Support
+# OpenWrt-CI workflow
+# 参考 P3TERX/Actions-OpenWrt 脚本及各位大神讨论后的改进措施
+name: OpenWrt-CI
 
 on:
   push:
@@ -6,75 +8,88 @@ on:
       - main
   workflow_dispatch:
 
-
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  build_openwrt:
+    name: Build OpenWrt Firmware
+    runs-on: ubuntu-22.04
+
     steps:
-      # 检出当前仓库代码
-      - name: Checkout code
-        uses: actions/checkout@v2
-
-      # 安装构建依赖
-      - name: Install build dependencies
+      - name: Clean up disk space and set TMPDIR
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            libncurses5-dev \
-            zlib1g-dev \
-            gawk \
-            git \
-            ccache \
-            libssl-dev \
-            xsltproc \
-            rsync \
-            wget \
-            unzip \
-            libxml-parser-perl \
-            sudo
+          echo "Cleaning /tmp directory..."
+          sudo rm -rf /tmp/* || true
+          # 创建一个新的临时目录（确保空间充足）
+          mkdir -p $HOME/tmp
+          export TMPDIR=$HOME/tmp
+          echo "TMPDIR set to: $TMPDIR"
+          echo "Disk usage after cleanup:"
+          df -h
 
-      # 克隆 OpenWrt 源码
-      - name: Clone OpenWrt repository
+      - name: Free up additional disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+
+      - name: Checkout OpenWrt source
+        uses: actions/checkout@v4
+
+      - name: Update feeds
         run: |
-          git clone https://github.com/openwrt/openwrt.git
-          cd openwrt
+          sed -i 's/#src-git helloworld/src-git helloworld/g' ./feeds.conf.default
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      # 添加 Surface 内核源码作为子模块
-      - name: Add Surface kernel source
-        run: |
-          cd openwrt
-          git submodule add https://github.com/linux-surface/linux-surface.git target/linux/surface
-          git submodule update --init --recursive
+      - name: Generate default config
+        run: make defconfig
 
-      # 输出当前工作目录（用于调试）
-      - name: Print working directory
-        run: pwd
+      - name: Download packages
+        run: make download -j16
 
-      # 应用 Surface 内核补丁
-      - name: Apply Surface kernel patches
+      - name: Compile firmware
+        env:
+          TMPDIR: ${{ runner.workspace }}/tmp  # 确保编译过程中使用我们设置的临时目录
         run: |
-          cd openwrt
-          PATCH_DIR=../../patches/6.12
-          for patch in $PATCH_DIR/*.patch; do
-            [ -f "$patch" ] && patch -p1 < "$patch" || echo "Patch $patch not found"
-          done
+          mkdir -p $TMPDIR
+          echo "Using TMPDIR: $TMPDIR"
+          # 开始编译，若并行编译失败则切换到单线程详细模式
+          make -j$(nproc) || make -j1 V=s
+          echo "======================="
+          echo "Disk usage after compile:"
+          df -h
+          echo "Directory sizes (excluding build_dir and bin):"
+          du -h --max-depth=1 ./ --exclude=build_dir --exclude=bin
+          echo "build_dir size:"
+          du -h --max-depth=1 ./build_dir
+          echo "bin size:"
+          du -h --max-depth=1 ./bin
 
-      # 复制 surface-6.12.config 配置文件
-      - name: Copy kernel configuration
+      - name: Prepare artifacts
         run: |
-          cp ../surface-6.12.config openwrt/.config
+          mkdir -p ./artifact/package ./artifact/buildinfo
+          # 删除中间生成的 packages 文件夹以减小体积
+          rm -rf $(find ./bin/targets/ -type d -name "packages")
+          cp -rf $(find ./bin/packages/ -type f -name "*.ipk") ./artifact/package/
+          cp -rf $(find ./bin/targets/ -type f \( -name "*.buildinfo" -o -name "*.manifest" \)) ./artifact/buildinfo/
 
-      # 配置内核
-      - name: Configure kernel
-        run: |
-          cd openwrt
-          make menuconfig  # 在此步骤中，您可以选择需要的内核模块和配置选项
+      - name: Upload buildinfo artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenWrt_buildinfo
+          path: ./artifact/buildinfo/
 
-      # 编译内核
-      - name: Build kernel
-        run: |
-          cd openwrt
-          make -j$(nproc)  # 使用所有可用的处理器核心进行编译
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenWrt_package
+          path: ./artifact/package/
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenWrt_firmware
+          path: ./bin/targets/
