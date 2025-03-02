@@ -1,4 +1,4 @@
-# OpenWrt-CI workflow
+# OpenWrt-CI workflow (完整示例)
 # 参考 P3TERX/Actions-OpenWrt 脚本及各位大神讨论后的改进措施
 name: OpenWrt-CI
 
@@ -40,7 +40,12 @@ jobs:
 
       - name: Update feeds
         run: |
-          sed -i 's/#src-git helloworld/src-git helloworld/g' ./feeds.conf.default
+          # 如果 feeds.conf.default 不存在，则复制默认配置文件
+          if [ ! -f feeds.conf.default ]; then
+            echo "feeds.conf.default not found, copying from feeds.conf.default.sample"
+            cp feeds.conf.default.sample feeds.conf.default
+          fi
+          sed -i 's/#src-git helloworld/src-git helloworld/g' feeds.conf.default
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
@@ -52,7 +57,7 @@ jobs:
 
       - name: Compile firmware
         env:
-          TMPDIR: ${{ runner.workspace }}/tmp  # 确保编译过程中使用我们设置的临时目录
+          TMPDIR: ${{ runner.workspace }}/tmp  # 指定编译过程中使用的临时目录
         run: |
           mkdir -p $TMPDIR
           echo "Using TMPDIR: $TMPDIR"
