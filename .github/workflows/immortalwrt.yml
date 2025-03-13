@@ -1,0 +1,118 @@
+name: immortalwrt-CI
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build_openwrt:
+    name: Build OpenWrt Firmware
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Clean up disk space and set TMPDIR
+        run: |
+          echo "Cleaning /tmp directory..."
+          sudo rm -rf /tmp/* || true
+          mkdir -p $HOME/tmp
+          export TMPDIR=$HOME/tmp
+          echo "TMPDIR set to: $TMPDIR"
+          echo "Disk usage after cleanup:"
+          df -h
+
+      - name: Free up additional disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Ensure OpenWrt source
+        id: set_workdir
+        run: |
+          if [ -f feeds.conf.default ]; then
+            echo "Using current repository as OpenWrt source."
+            echo "WORKDIR=." >> $GITHUB_OUTPUT
+          else
+            echo "feeds.conf.default not found, cloning OpenWrt source into openwrt..."
+            git clone https://github.com/tetoraowo/immortalwrt_surface.git openwrt
+            echo "WORKDIR=openwrt" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update feeds
+        working-directory: ${{ steps.set_workdir.outputs.WORKDIR }}
+        run: |
+          if [ ! -f feeds.conf.default ]; then
+            if [ -f feeds.conf.default.sample ]; then
+              cp feeds.conf.default.sample feeds.conf.default
+            else
+              touch feeds.conf.default
+            fi
+          fi
+          sed -i 's/#src-git helloworld/src-git helloworld/g' feeds.conf.default
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Generate default config
+        working-directory: ${{ steps.set_workdir.outputs.WORKDIR }}
+        run: make defconfig
+
+      - name: Download packages
+        working-directory: ${{ steps.set_workdir.outputs.WORKDIR }}
+        run: make download -j16
+
+      - name: Compile firmware
+        working-directory: ${{ steps.set_workdir.outputs.WORKDIR }}
+        env:
+          TMPDIR: ${{ runner.workspace }}/tmp
+        run: |
+          mkdir -p $TMPDIR
+          echo "Using TMPDIR: $TMPDIR"
+          make -j$(nproc) || make -j1 V=s
+          echo "======================="
+          echo "Disk usage after compile:"
+          df -h
+          echo "Directory structure for debugging:"
+          ls -R ./bin
+
+      - name: Prepare artifacts
+        working-directory: ${{ steps.set_workdir.outputs.WORKDIR }}
+        run: |
+          mkdir -p ./artifact/package ./artifact/buildinfo
+          
+          # 复制IPK文件（同时处理targets和packages目录）
+          find ./bin/targets/ -type f -name "*.ipk" -exec cp -v --parents -rf {} ./artifact/package/ \;
+          find ./bin/packages/ -type f -name "*.ipk" -exec cp -v --parents -rf {} ./artifact/package/ \;
+          
+          # 复制构建信息文件
+          find ./bin/targets/ -type f \( -name "*.buildinfo" -o -name "*.manifest" \) -exec cp -v --parents -rf {} ./artifact/buildinfo/ \;
+          
+          # 验证文件结构
+          echo "Final artifact structure:"
+          tree -a ./artifact
+
+      - name: Upload buildinfo artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenWrt_buildinfo
+          path: ${{ steps.set_workdir.outputs.WORKDIR }}/artifact/buildinfo/
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenWrt_package
+          path: ${{ steps.set_workdir.outputs.WORKDIR }}/artifact/package/
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenWrt_firmware
+          path: ${{ steps.set_workdir.outputs.WORKDIR }}/bin/targets/
