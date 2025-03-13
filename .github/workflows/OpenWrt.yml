@@ -43,7 +43,7 @@ jobs:
             echo "WORKDIR=." >> $GITHUB_OUTPUT
           else
             echo "feeds.conf.default not found, cloning OpenWrt source into openwrt..."
-            git clone https://github.com/nisemoe/lede_surface.git openwrt
+            git clone https://github.com/tetoraowo/immortalwrt_surface.git openwrt
             echo "WORKDIR=openwrt" >> $GITHUB_OUTPUT
           fi
 
