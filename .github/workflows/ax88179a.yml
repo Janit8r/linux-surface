@@ -50,25 +50,21 @@ jobs:
       - name: Add AX88179A USB driver
         working-directory: ${{ steps.set_workdir.outputs.WORKDIR }}
         run: |
-          # 创建驱动包目录
           mkdir -p package/kernel/ax88179a
+          wget "https://raw.githubusercontent.com/nisemoe/lede_surface/refs/heads/master/ASIX_USB_NIC_Linux_Driver_Source_v3.5.0.tar.bz2" -O ax88179a.tar.bz2
+          tar -xjf ax88179a.tar.bz2 -C package/kernel/ax88179a --strip-components=1
 
-          # 下载驱动源码（ASIX 官方驱动链接）
-          wget "https://raw.githubusercontent.com/nisemoe/lede_surface/refs/heads/master/ASIX_USB_NIC_Linux_Driver_Source_v3.5.0.tar.bz2" -O ax88179a.tar.gz
-          tar -xzf ax88179a.tar.gz -C package/kernel/ax88179a --strip-components=1
-
-          # 编写 OpenWrt 包定义文件
           cat > package/kernel/ax88179a/Makefile <<EOF
           include \$(TOPDIR)/rules.mk
           include \$(INCLUDE_DIR)/kernel.mk
 
           PKG_NAME:=ax88179a
-          PKG_VERSION:=1.20.0
+          PKG_VERSION:=3.5.0  # 根据实际驱动版本修正
           PKG_RELEASE:=1
 
-          PKG_SOURCE:=\$(PKG_NAME)-\$(PKG_VERSION).tar.gz
-          PKG_SOURCE_URL:=https://www.asix.com.tw/tw/support/download/file/1942?time=1741937995723
-          PKG_HASH:=  # 可选：填写实际校验和
+          PKG_SOURCE:=\$(PKG_NAME)-\$(PKG_VERSION).tar.bz2
+          PKG_SOURCE_URL:=https://raw.githubusercontent.com/nisemoe/lede_surface/refs/heads/master/
+          PKG_HASH:=  # 添加实际校验和
 
           include \$(INCLUDE_DIR)/package.mk
 
@@ -107,7 +103,6 @@ jobs:
         working-directory: ${{ steps.set_workdir.outputs.WORKDIR }}
         run: |
           make defconfig
-          # 强制启用驱动配置
           echo "CONFIG_PACKAGE_kmod-ax88179a=y" >> .config
           echo "CONFIG_USB_SUPPORT=y" >> .config
           echo "CONFIG_USB_NET_DRIVERS=y" >> .config
@@ -152,3 +147,7 @@ jobs:
           path: ${{ steps.set_workdir.outputs.WORKDIR }}/artifact/package/
 
       - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenWrt_firmware
+          path: ${{ steps.set_workdir.outputs.WORKDIR }}/bin/targets/
