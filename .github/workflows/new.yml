@@ -1,0 +1,132 @@
+name: OpenWrt-CI
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build_openwrt:
+    name: Build OpenWrt Firmware
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Clean up disk space and set TMPDIR
+        run: |
+          echo "Cleaning /tmp directory..."
+          sudo rm -rf /tmp/* || true
+          mkdir -p $HOME/tmp
+          export TMPDIR=$HOME/tmp
+          echo "TMPDIR set to: $TMPDIR"
+          echo "Disk usage after cleanup:"
+          df -h
+
+      - name: Free up additional disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Ensure OpenWrt source
+        id: set_workdir
+        run: |
+          if [ -f feeds.conf.default ]; then
+            echo "Using current repository as OpenWrt source."
+            echo "WORKDIR=." >> $GITHUB_OUTPUT
+          else
+            echo "feeds.conf.default not found, cloning OpenWrt source into openwrt..."
+            git clone https://github.com/nisemoe/lede_surface.git openwrt
+            echo "WORKDIR=openwrt" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update feeds
+        working-directory: ${{ steps.set_workdir.outputs.WORKDIR }}
+        run: |
+          # 如果 feeds.conf.default 不存在，则尝试复制默认配置文件；若 sample 也不存在则创建空文件
+          if [ ! -f feeds.conf.default ]; then
+            if [ -f feeds.conf.default.sample ]; then
+              echo "feeds.conf.default not found, copying from feeds.conf.default.sample"
+              cp feeds.conf.default.sample feeds.conf.default
+            else
+              echo "No feeds configuration file found, creating an empty feeds.conf.default"
+              touch feeds.conf.default
+            fi
+          fi
+          sed -i 's/#src-git helloworld/src-git helloworld/g' feeds.conf.default
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Generate default config
+        working-directory: ${{ steps.set_workdir.outputs.WORKDIR }}
+        run: make defconfig
+
+      - name: Apply custom config
+        working-directory: ${{ steps.set_workdir.outputs.WORKDIR }}
+        run: |
+          # 下载远程配置文件
+          curl -fL -o .config "https://raw.githubusercontent.com/Janit8r/op/refs/heads/main/configs/x86_64.config"
+          
+          # 验证文件是否下载成功
+          if [ ! -f .config ]; then
+            echo "❌ 配置文件下载失败"
+            exit 1
+          fi
+          
+          # 合并配置
+          make defconfig
+
+      - name: Download packages
+        working-directory: ${{ steps.set_workdir.outputs.WORKDIR }}
+        run: make download -j16
+
+      - name: Compile firmware
+        working-directory: ${{ steps.set_workdir.outputs.WORKDIR }}
+        env:
+          TMPDIR: ${{ runner.workspace }}/tmp
+        run: |
+          mkdir -p $TMPDIR
+          echo "Using TMPDIR: $TMPDIR"
+          make -j$(nproc) || make -j1 V=s
+          echo "======================="
+          echo "Disk usage after compile:"
+          df -h
+          echo "Directory sizes (excluding build_dir and bin):"
+          du -h --max-depth=1 ./ --exclude=build_dir --exclude=bin
+          echo "build_dir size:"
+          du -h --max-depth=1 ./build_dir
+          echo "bin size:"
+          du -h --max-depth=1 ./bin
+
+      - name: Prepare artifacts
+        working-directory: ${{ steps.set_workdir.outputs.WORKDIR }}
+        run: |
+          mkdir -p ./artifact/package ./artifact/buildinfo
+          rm -rf $(find ./bin/targets/ -type d -name "packages")
+          cp -rf $(find ./bin/packages/ -type f -name "*.ipk") ./artifact/package/
+          cp -rf $(find ./bin/targets/ -type f \( -name "*.buildinfo" -o -name "*.manifest" \)) ./artifact/buildinfo/
+
+      - name: Upload buildinfo artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenWrt_buildinfo
+          path: ${{ steps.set_workdir.outputs.WORKDIR }}/artifact/buildinfo/
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenWrt_package
+          path: ${{ steps.set_workdir.outputs.WORKDIR }}/artifact/package/
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenWrt_firmware
+          path: ${{ steps.set_workdir.outputs.WORKDIR }}/bin/targets/
