@@ -1,4 +1,4 @@
-name: OpenWrt-ax88179a
+name: OpenWrt-ax88179a1
 
 on:
   push:
