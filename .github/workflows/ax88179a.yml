@@ -1,0 +1,154 @@
+name: OpenWrt-ax88179a
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build_openwrt:
+    name: Build OpenWrt Firmware
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Clean up disk space and set TMPDIR
+        run: |
+          echo "Cleaning /tmp directory..."
+          sudo rm -rf /tmp/* || true
+          mkdir -p $HOME/tmp
+          export TMPDIR=$HOME/tmp
+          echo "TMPDIR set to: $TMPDIR"
+          echo "Disk usage after cleanup:"
+          df -h
+
+      - name: Free up additional disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Ensure OpenWrt source
+        id: set_workdir
+        run: |
+          if [ -f feeds.conf.default ]; then
+            echo "Using current repository as OpenWrt source."
+            echo "WORKDIR=." >> $GITHUB_OUTPUT
+          else
+            echo "feeds.conf.default not found, cloning OpenWrt source into openwrt..."
+            git clone https://github.com/nisemoe/lede_surface.git openwrt
+            echo "WORKDIR=openwrt" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Add AX88179A USB driver
+        working-directory: ${{ steps.set_workdir.outputs.WORKDIR }}
+        run: |
+          # 创建驱动包目录
+          mkdir -p package/kernel/ax88179a
+
+          # 下载驱动源码（ASIX 官方驱动链接）
+          wget "https://raw.githubusercontent.com/nisemoe/lede_surface/refs/heads/master/ASIX_USB_NIC_Linux_Driver_Source_v3.5.0.tar.bz2" -O ax88179a.tar.gz
+          tar -xzf ax88179a.tar.gz -C package/kernel/ax88179a --strip-components=1
+
+          # 编写 OpenWrt 包定义文件
+          cat > package/kernel/ax88179a/Makefile <<EOF
+          include \$(TOPDIR)/rules.mk
+          include \$(INCLUDE_DIR)/kernel.mk
+
+          PKG_NAME:=ax88179a
+          PKG_VERSION:=1.20.0
+          PKG_RELEASE:=1
+
+          PKG_SOURCE:=\$(PKG_NAME)-\$(PKG_VERSION).tar.gz
+          PKG_SOURCE_URL:=https://www.asix.com.tw/tw/support/download/file/1942?time=1741937995723
+          PKG_HASH:=  # 可选：填写实际校验和
+
+          include \$(INCLUDE_DIR)/package.mk
+
+          define KernelPackage/ax88179a
+            SECTION:=kernel
+            CATEGORY:=Kernel modules
+            SUBMENU:=USB Support
+            TITLE:=ASIX AX88179A USB 3.0 Gigabit Ethernet
+            DEPENDS:=@USB_SUPPORT +kmod-usb-core +kmod-usb-net
+            FILES:=\$(PKG_BUILD_DIR)/ax88179a.ko
+            AUTOLOAD:=\$(call AutoProbe,ax88179a)
+          endef
+
+          define Build/Compile
+            \$(MAKE) -C "\$(LINUX_DIR)" \
+              ARCH="\$(LINUX_ARCH)" \
+              CROSS_COMPILE="\$(TARGET_CROSS)" \
+              M="\$(PKG_BUILD_DIR)" \
+              modules
+          endef
+
+          \$(eval \$(call KernelPackage,ax88179a))
+          EOF
+
+      - name: Update feeds
+        working-directory: ${{ steps.set_workdir.outputs.WORKDIR }}
+        run: |
+          if [ ! -f feeds.conf.default ]; then
+            [ -f feeds.conf.default.sample ] && cp feeds.conf.default.sample feeds.conf.default || touch feeds.conf.default
+          fi
+          sed -i 's/#src-git helloworld/src-git helloworld/g' feeds.conf.default
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Generate default config
+        working-directory: ${{ steps.set_workdir.outputs.WORKDIR }}
+        run: |
+          make defconfig
+          # 强制启用驱动配置
+          echo "CONFIG_PACKAGE_kmod-ax88179a=y" >> .config
+          echo "CONFIG_USB_SUPPORT=y" >> .config
+          echo "CONFIG_USB_NET_DRIVERS=y" >> .config
+
+      - name: Download packages
+        working-directory: ${{ steps.set_workdir.outputs.WORKDIR }}
+        run: make download -j16
+
+      - name: Compile firmware
+        working-directory: ${{ steps.set_workdir.outputs.WORKDIR }}
+        env:
+          TMPDIR: ${{ runner.workspace }}/tmp
+        run: |
+          mkdir -p $TMPDIR
+          echo "Using TMPDIR: $TMPDIR"
+          make -j$(nproc) || make -j1 V=s
+          echo "======================="
+          echo "Disk usage after compile:"
+          df -h
+          du -h --max-depth=1 ./ --exclude=build_dir --exclude=bin
+          du -h --max-depth=1 ./build_dir
+          du -h --max-depth=1 ./bin
+
+      - name: Prepare artifacts
+        working-directory: ${{ steps.set_workdir.outputs.WORKDIR }}
+        run: |
+          mkdir -p ./artifact/package ./artifact/buildinfo
+          rm -rf $(find ./bin/targets/ -type d -name "packages")
+          cp -rf $(find ./bin/packages/ -type f -name "*.ipk") ./artifact/package/
+          cp -rf $(find ./bin/targets/ -type f \( -name "*.buildinfo" -o -name "*.manifest" \)) ./artifact/buildinfo/
+
+      - name: Upload buildinfo artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenWrt_buildinfo
+          path: ${{ steps.set_workdir.outputs.WORKDIR }}/artifact/buildinfo/
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenWrt_package
+          path: ${{ steps.set_workdir.outputs.WORKDIR }}/artifact/package/
+
+      - name: Upload firmware artifact
