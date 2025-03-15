@@ -82,7 +82,7 @@ jobs:
           
           # 合并配置
           make defconfig
-
+          cat .config
       - name: Download packages
         working-directory: ${{ steps.set_workdir.outputs.WORKDIR }}
         run: make download -j16
