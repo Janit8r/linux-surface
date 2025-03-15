@@ -72,7 +72,7 @@ jobs:
         working-directory: ${{ steps.set_workdir.outputs.WORKDIR }}
         run: |
           # 下载远程配置文件
-          curl -fL -o .config "https://raw.githubusercontent.com/Janit8r/op/refs/heads/main/configs/x86_64.config"
+          curl -fL -o .config "https://raw.githubusercontent.com/Janit8r/op/refs/heads/main/configs/nwx86.config"
           
           # 验证文件是否下载成功
           if [ ! -f .config ]; then
